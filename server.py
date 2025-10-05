@@ -17,6 +17,9 @@ SERVER_URL = os.getenv('SERVER_URL', 'https://api.generals.gxwtf.cn')
 # 从环境变量获取端口号，默认为1214
 PORT = int(os.getenv('PORT', 1214))
 
+# 可用的机器人种类列表
+AVAILABLE_BOT_TYPES = ['aigbot', 'gbot']
+
 room_bots = {}  # 格式: {room_id: {bot_type: {bot_number: bot_info}}}
 proc_list = []  # 存储进程对象
 
@@ -233,6 +236,17 @@ def remove_bot():
     else:
         return jsonify({'success': False, 'message': message}), 404
 
+@app.route('/type/', methods=['GET'])
+def get_bot_types():
+    """
+    获取所有可用的机器人种类
+    """
+    return jsonify({
+        'success': True,
+        'bot_types': AVAILABLE_BOT_TYPES,
+        'count': len(AVAILABLE_BOT_TYPES)
+    })
+
 def end_all():
     """
     结束所有机器人进程 - 先退出房间再终止进程
@@ -285,6 +299,7 @@ if __name__ == '__main__':
     print(f"服务器URL: {SERVER_URL}")
     print(f"端口号: {PORT}")
     print("可用接口:")
+    print("  GET /type/                      - 获取所有可用的机器人种类")
     print("  GET /add/?roomId=3&type=aigbot  - 添加机器人到指定房间")
     print("  GET /status/                    - 查看全局机器人状态")
     print("  GET /status/<room_id>/          - 查看指定房间机器人状态")
