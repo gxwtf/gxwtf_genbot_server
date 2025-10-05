@@ -23,6 +23,26 @@ AVAILABLE_BOT_TYPES = ['aigbot', 'gbot']
 room_bots = {}  # 格式: {room_id: {bot_type: {bot_number: bot_info}}}
 proc_list = []  # 存储进程对象
 
+# 添加跨域请求支持
+@app.after_request
+def after_request(response):
+    """添加跨域请求头"""
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
+# 处理OPTIONS请求（预检请求）
+@app.route('/', methods=['OPTIONS'])
+@app.route('/<path:path>', methods=['OPTIONS'])
+def options_handler(path=None):
+    """处理跨域预检请求"""
+    response = jsonify({'success': True})
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    return response
+
 def get_next_bot_number(room_id, bot_type):
     """获取下一个机器人编号"""
     if room_id not in room_bots:
@@ -125,12 +145,15 @@ def remove_last_bot_by_type(room_id, bot_type):
     
     return True, f"已移除房间 {room_id} 中 {bot_type} 类型的最后一个机器人 ({bot_info['username']})"
 
-@app.route('/add/', methods=['GET'])
+@app.route('/add/', methods=['GET', 'OPTIONS'])
 def add_bot():
     """
     添加机器人接口
     GET参数: roomId, type
     """
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+    
     room_id = request.args.get('roomId')
     bot_type = request.args.get('type', 'aigbot')
     
@@ -144,11 +167,14 @@ def add_bot():
     else:
         return jsonify({'success': False, 'message': message}), 500
 
-@app.route('/status/', methods=['GET'])
+@app.route('/status/', methods=['GET', 'OPTIONS'])
 def get_global_status():
     """
     获取全局机器人状态
     """
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+    
     status_info = []
     total_bots = 0
     
@@ -182,11 +208,14 @@ def get_global_status():
         'rooms': status_info
     })
 
-@app.route('/status/<room_id>/', methods=['GET'])
+@app.route('/status/<room_id>/', methods=['GET', 'OPTIONS'])
 def get_room_status(room_id):
     """
     获取指定房间的机器人状态
     """
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+    
     if room_id not in room_bots:
         return jsonify({'success': False, 'message': f'房间 {room_id} 不存在'}), 404
     
@@ -214,12 +243,15 @@ def get_room_status(room_id):
         'room': room_info
     })
 
-@app.route('/remove/', methods=['GET'])
+@app.route('/remove/', methods=['GET', 'OPTIONS'])
 def remove_bot():
     """
     移除指定房间和类型的最后一个机器人
     GET参数: roomId, type
     """
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+    
     room_id = request.args.get('roomId')
     bot_type = request.args.get('type')
     
@@ -236,16 +268,30 @@ def remove_bot():
     else:
         return jsonify({'success': False, 'message': message}), 404
 
-@app.route('/type/', methods=['GET'])
+@app.route('/type/', methods=['GET', 'OPTIONS'])
 def get_bot_types():
     """
     获取所有可用的机器人种类
     """
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+    
     return jsonify({
         'success': True,
         'bot_types': AVAILABLE_BOT_TYPES,
         'count': len(AVAILABLE_BOT_TYPES)
     })
+
+@app.route('/shutdown/', methods=['GET', 'OPTIONS'])
+def shutdown():
+    """
+    关闭服务器并结束所有机器人
+    """
+    if request.method == 'OPTIONS':
+        return jsonify({'success': True})
+    
+    end_all()
+    return jsonify({'success': True, 'message': '服务器正在关闭...'})
 
 def end_all():
     """
@@ -285,14 +331,6 @@ def end_all():
     room_bots.clear()
     proc_list.clear()
     print("所有机器人已关闭")
-
-@app.route('/shutdown/', methods=['GET'])
-def shutdown():
-    """
-    关闭服务器并结束所有机器人
-    """
-    end_all()
-    return jsonify({'success': True, 'message': '服务器正在关闭...'})
 
 if __name__ == '__main__':
     print("启动机器人平台服务器...")
