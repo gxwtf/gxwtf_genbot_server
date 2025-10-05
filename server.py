@@ -9,11 +9,8 @@ from multiprocessing import Process
 from flask import Flask, request, jsonify
 import time
 from bot import gen_api
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
-# 添加这行代码
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # 从环境变量获取服务器URL
 SERVER_URL = os.getenv('SERVER_URL', 'https://api.generals.gxwtf.cn')
@@ -348,7 +345,7 @@ if __name__ == '__main__':
     print("  GET /shutdown/                  - 关闭服务器")
     
     try:
-        app.run(host='0.0.0.0', port=PORT, debug=False)
+        app.run(host='localhost', port=PORT, debug=False)
     except KeyboardInterrupt:
         print("\n收到中断信号，正在关闭服务器...")
     finally:
