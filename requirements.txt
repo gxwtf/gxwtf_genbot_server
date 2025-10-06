@@ -1,0 +1,4 @@
+Flask==3.1.2
+numpy==2.3.3
+python-socketio==5.14.1
+torch==2.8.0
