@@ -1,0 +1,13 @@
+[2025-10-06 04:25:14 +0000] [3240514] [INFO] Starting gunicorn 20.1.0
+[2025-10-06 04:25:14 +0000] [3240514] [INFO] Listening at: http://0.0.0.0:1214 (3240514)
+[2025-10-06 04:25:14 +0000] [3240514] [INFO] Using worker: sync
+[2025-10-06 04:25:14 +0000] [3240515] [INFO] Booting worker with pid: 3240515
+[2025-10-06 04:25:14 +0000] [3240516] [INFO] Booting worker with pid: 3240516
+[2025-10-06 04:25:14 +0000] [3240517] [INFO] Booting worker with pid: 3240517
+[2025-10-06 04:25:14 +0000] [3240518] [INFO] Booting worker with pid: 3240518
+[2025-10-06 04:26:03 +0000] [3240514] [INFO] Handling signal: int
+[2025-10-06 04:26:03 +0000] [3240515] [INFO] Worker exiting (pid: 3240515)
+[2025-10-06 04:26:03 +0000] [3240518] [INFO] Worker exiting (pid: 3240518)
+[2025-10-06 04:26:03 +0000] [3240516] [INFO] Worker exiting (pid: 3240516)
+[2025-10-06 04:26:03 +0000] [3240517] [INFO] Worker exiting (pid: 3240517)
+[2025-10-06 04:26:03 +0000] [3240514] [INFO] Shutting down: Master

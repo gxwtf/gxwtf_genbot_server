@@ -423,7 +423,7 @@ class GBot(GBotBase):
                 tile = self.game_map[i][j]
                 if tile.color_index == self.color and tile.army_size > 1 and tile.tile_type!=TileType.King:
                     max_army=max(max_army,tile.army_size)
-        if self.defense_mode and max_army<=100:
+        if self.defense_mode:
             defense_move = self.find_defense_move()
             if defense_move:
                 source, target = defense_move
