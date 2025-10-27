@@ -1,10 +1,10 @@
 import random
 import logging
-from auto_bot.gen_api import *
+from .gen_api import *
 from typing import List, Tuple, Union, Dict, Any
 from collections import deque
 import multiprocessing as mp
-import auto_bot.kong_bot as kong_bot
+from .kongbot_backend import start_game
 import time
 import sys
 import os
@@ -127,7 +127,7 @@ def bot_worker(conn, start_data, color):
     # 创建机器人实例并运行
     client = BotGenerals(conn, start_data, color)
     try:
-        kong_bot.start_game(client)
+        start_game(client)
     except Exception as e:
         logging.error(f"Bot process error: {e}")
     finally:

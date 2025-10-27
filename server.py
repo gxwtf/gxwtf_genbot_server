@@ -18,7 +18,7 @@ SERVER_URL = os.getenv('SERVER_URL', 'https://api.generals.gxwtf.cn')
 PORT = int(os.getenv('PORT', 1214))
 
 # 可用的机器人种类列表
-AVAILABLE_BOT_TYPES = ['aigbot', 'gbot']
+AVAILABLE_BOT_TYPES = ['aigbot', 'gbot', 'kongbot']
 
 room_bots = {}  # 格式: {room_id: {bot_type: {bot_number: bot_info}}}
 proc_list = []  # 存储进程对象
@@ -59,6 +59,7 @@ def add_bot_process(room_id, bot_type):
     """
     添加并启动一个机器人进程
     """
+    print('获取到请求')
     try:
         # 动态导入机器人模块
         bot_module = importlib.import_module(f"bot.{bot_type}")
