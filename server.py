@@ -9,6 +9,9 @@ from multiprocessing import Process
 from flask import Flask, request, jsonify
 import time
 from bot import gen_api
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
