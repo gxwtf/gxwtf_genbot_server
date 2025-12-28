@@ -132,8 +132,12 @@ def init_bot(gbot,server_url):
         print("游戏结束，等待下一局游戏...")
         
     @sio.event
-    def game_ended(winner: dict, replay_link: str):
-        print(f"game_ended: {winner[0]['username']} {replay_link}")
+    def game_ended(winner: List[dict], replay_link: str):
+        # 处理空winner数组的情况（强制结束游戏时）
+        if winner and len(winner) > 0:
+            print(f"game_ended: {winner[0]['username']} {replay_link}")
+        else:
+            print(f"game_ended: 游戏被强制结束 {replay_link}")
         # 不再自动断开连接，等待下一局游戏
         print("游戏结束，等待下一局游戏...")
         sio.disconnect()

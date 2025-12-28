@@ -4,7 +4,7 @@ from .gen_api import *
 from typing import List, Tuple, Union, Dict, Any
 from collections import deque
 import multiprocessing as mp
-from .kongbot_backend import start_game
+from .Kongbot_backend import start_game
 import time
 import sys
 import os

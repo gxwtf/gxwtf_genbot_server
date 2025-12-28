@@ -21,7 +21,7 @@ SERVER_URL = os.getenv('SERVER_URL', 'https://api.generals.gxwtf.cn')
 PORT = int(os.getenv('PORT', 1214))
 
 # 可用的机器人种类列表
-AVAILABLE_BOT_TYPES = ['aigbot', 'gbot', 'kongbot']
+AVAILABLE_BOT_TYPES = ['AIgbot', 'Gbot', 'Kongbot']
 
 room_bots = {}  # 格式: {room_id: {bot_type: {bot_number: bot_info}}}
 proc_list = []  # 存储进程对象
@@ -74,8 +74,8 @@ def add_bot_process(room_id, bot_type):
         # 创建机器人实例
         gbot = bot_module.GBot(room_id, username)
         
-        # 创建并启动进程
-        p = Process(target=gen_api.run_bot, args=(gbot, SERVER_URL, 3))
+        # 创建并启动进程（移除延迟参数）
+        p = Process(target=gen_api.run_bot, args=(gbot, SERVER_URL, 0))
         p.start()
         
         # 存储进程信息（不存储Process对象本身，只存储基本信息）
@@ -149,6 +149,39 @@ def remove_last_bot_by_type(room_id, bot_type):
     
     return True, f"已移除房间 {room_id} 中 {bot_type} 类型的最后一个机器人 ({bot_info['username']})"
 
+def remove_all_bots_in_room(room_id):
+    """
+    移除指定房间的所有机器人
+    """
+    if room_id not in room_bots:
+        return False, f"房间 {room_id} 不存在"
+    
+    room_data = room_bots[room_id]
+    removed_count = 0
+    
+    # 收集所有需要终止的进程
+    processes_to_kill = []
+    
+    for bot_type, bots_dict in room_data.items():
+        for bot_number, bot_info in bots_dict.items():
+            # 终止进程
+            if is_process_alive(bot_info['process_id']):
+                try:
+                    os.kill(bot_info['process_id'], 9)  # 发送SIGKILL信号
+                    processes_to_kill.append(bot_info['process_id'])
+                except (OSError, ProcessLookupError):
+                    pass  # 进程可能已经结束
+            removed_count += 1
+    
+    # 清理数据结构
+    del room_bots[room_id]
+    
+    # 从proc_list中移除对应的进程对象
+    global proc_list
+    proc_list = [p for p in proc_list if p.pid not in processes_to_kill]
+    
+    return True, f"已移除房间 {room_id} 中的所有机器人，共 {removed_count} 个"
+
 @app.route('/add/', methods=['GET', 'OPTIONS'])
 def add_bot():
     """
@@ -159,7 +192,7 @@ def add_bot():
         return jsonify({'success': True})
     
     room_id = request.args.get('roomId')
-    bot_type = request.args.get('type', 'aigbot')
+    bot_type = request.args.get('type', 'AIgbot')
     
     if not room_id:
         return jsonify({'success': False, 'message': '缺少roomId参数'}), 400
@@ -250,8 +283,10 @@ def get_room_status(room_id):
 @app.route('/remove/', methods=['GET', 'OPTIONS'])
 def remove_bot():
     """
-    移除指定房间和类型的最后一个机器人
-    GET参数: roomId, type
+    移除机器人接口
+    GET参数: roomId, type（可选）
+    - 如果同时提供roomId和type：移除指定房间和类型的最后一个机器人
+    - 如果只提供roomId：移除指定房间的所有机器人
     """
     if request.method == 'OPTIONS':
         return jsonify({'success': True})
@@ -262,9 +297,15 @@ def remove_bot():
     if not room_id:
         return jsonify({'success': False, 'message': '缺少roomId参数'}), 400
     
+    # 如果没有提供type参数，移除整个房间的所有机器人
     if not bot_type:
-        return jsonify({'success': False, 'message': '缺少type参数'}), 400
+        success, message = remove_all_bots_in_room(room_id)
+        if success:
+            return jsonify({'success': True, 'message': message})
+        else:
+            return jsonify({'success': False, 'message': message}), 404
     
+    # 如果提供了type参数，按原逻辑移除指定类型的最后一个机器人
     success, message = remove_last_bot_by_type(room_id, bot_type)
     
     if success:
@@ -299,54 +340,53 @@ def shutdown():
 
 def end_all():
     """
-    结束所有机器人进程 - 先退出房间再终止进程
+    结束所有机器人进程 - 立即终止所有进程
     """
-    print("开始关闭所有机器人...")
+    print("开始立即关闭所有机器人...")
     
-    # 第一步：让所有机器人先退出房间
-    for room_id, room_data in room_bots.items():
-        for bot_type, bots_dict in room_data.items():
-            for bot_number, bot_info in bots_dict.items():
-                try:
-                    print(f"让机器人 {bot_info['username']} 退出房间...")
-                    # 动态导入机器人模块
-                    bot_module = importlib.import_module(f"bot.{bot_info['bot_type']}")
-                    # 创建机器人实例
-                    gbot = bot_module.GBot(bot_info['room_id'], bot_info['username'])
-                    # 调用退出房间函数
-                    gen_api.leave_room(gbot, SERVER_URL)
-                    time.sleep(1)  # 等待退出操作完成
-                except Exception as e:
-                    print(f"机器人 {bot_info['username']} 退出房间时出错: {e}")
-    
-    # 第二步：等待一小段时间确保退出操作完成
-    print("等待机器人退出房间操作完成...")
-    time.sleep(3)
-    
-    # 第三步：终止所有进程
-    print("终止所有机器人进程...")
+    # 直接终止所有进程，不再等待退出房间
+    print("立即终止所有机器人进程...")
     for p in proc_list:
         if p.is_alive():
-            p.terminate()
+            try:
+                p.terminate()  # 发送terminate信号
+            except Exception as e:
+                print(f"终止进程时出错: {e}")
     
+    # 等待很短时间让进程终止
+    print("等待进程终止...")
     for p in proc_list:
-        p.join(timeout=5)
+        try:
+            p.join(timeout=1)  # 只等待1秒
+        except Exception as e:
+            print(f"等待进程终止时出错: {e}")
     
+    # 如果还有存活的进程，强制杀死
+    for p in proc_list:
+        if p.is_alive():
+            try:
+                print(f"强制杀死进程 {p.pid}")
+                os.kill(p.pid, 9)  # 发送SIGKILL信号
+            except Exception as e:
+                print(f"强制杀死进程时出错: {e}")
+    
+    # 清理数据结构
     room_bots.clear()
     proc_list.clear()
-    print("所有机器人已关闭")
+    print("所有机器人已立即关闭")
 
 if __name__ == '__main__':
     print("启动机器人平台服务器...")
     print(f"服务器URL: {SERVER_URL}")
     print(f"端口号: {PORT}")
     print("可用接口:")
-    print("  GET /type/                      - 获取所有可用的机器人种类")
-    print("  GET /add/?roomId=3&type=aigbot  - 添加机器人到指定房间")
-    print("  GET /status/                    - 查看全局机器人状态")
-    print("  GET /status/<room_id>/          - 查看指定房间机器人状态")
-    print("  GET /remove/?roomId=3&type=aigbot - 移除指定房间类型的最后一个机器人")
-    print("  GET /shutdown/                  - 关闭服务器")
+    print("  GET /type/                        - 获取所有可用的机器人种类")
+    print("  GET /add/?roomId=3&type=AIgbot    - 添加机器人到指定房间")
+    print("  GET /status/                      - 查看全局机器人状态")
+    print("  GET /status/<room_id>/            - 查看指定房间机器人状态")
+    print("  GET /remove/?roomId=3             - 移除指定房间所有的机器人")
+    print("  GET /remove/?roomId=3&type=AIgbot - 移除指定房间类型的最后一个机器人")
+    print("  GET /shutdown/                    - 关闭服务器")
     
     try:
         app.run(host='localhost', port=PORT, debug=False)
