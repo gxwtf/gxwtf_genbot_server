@@ -33,6 +33,7 @@ class GBotBase:
         self.game_map = None
         self.turns_count = 0 
         self.leader_board_data = None
+        self._send_callback = None
 
     def init_map(self, map_width: int, map_height: int):
         self.game_map = [
@@ -60,6 +61,11 @@ class GBotBase:
     def handle_move(self):
         # should return ({"x": source.x, "y": source.y},{"x": target.x, "y": target.y},move_half)
         pass
+    def send_message(self,msg):
+        if self._send_callback:
+            self._send_callback(msg)
+        else:
+            print("send_message called but no callback set")
     
 #sio=None
 
@@ -145,6 +151,9 @@ def init_bot(gbot,server_url):
     sio.connect(
         server_url + f"?username={gbot.username}&roomId={gbot.room_id}"
     )
+    def send_message_callback(msg):
+        sio.emit("player_message", msg)
+    gbot._send_callback = send_message_callback
     #sio.wait()
     return sio
 
