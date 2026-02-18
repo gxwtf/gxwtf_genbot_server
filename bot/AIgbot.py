@@ -12,6 +12,10 @@ class Point:
         self.y = y
     def __eq__(self, other):
         return self.x == other.x and self.y == other.y
+    def __hash__(self):
+        return hash((self.x, self.y))
+    def __str__(self):
+        return f"Point({self.x}, {self.y})"
 ORIGINAL_MAP_WIDTH=23
 MAP_CHANNELS=11
 def pad(state, fill_value = 0, map_width = ORIGINAL_MAP_WIDTH):
@@ -22,6 +26,13 @@ def pad(state, fill_value = 0, map_width = ORIGINAL_MAP_WIDTH):
     #print("hhhh --", y_padding, x_padding, state.shape)
     return np.pad(state, pad_width=(y_padding, x_padding), 
                 mode='constant', constant_values=fill_value), y_padding, x_padding
+
+def unpad(x, pad_width):
+    slices = []
+    for c in pad_width:
+        e = None if c[1] == 0 else -c[1]
+        slices.append(slice(c[0], e))
+    return x[tuple(slices)]
 
 def dtp2dir(direction: Tuple[int, int])->int:
     if direction[0]==-1:
@@ -38,6 +49,98 @@ def zero2none(x):
         return None
     return x
 
+class GeneralPrediction:
+    """敌人将军位置预测系统"""
+    def __init__(self):
+        self.fog_scores = {}  # 迷雾格子得分
+        self.enemy_appearances = []  # 敌人单位出现的位置历史
+        self.predicted_general = None  # 预测的将军位置
+        self.confidence = 0  # 预测置信度
+        
+    def update_prediction(self, enemy_positions, game_map, map_width, map_height, game_state, x_offset, y_offset,color):
+        """更新将军位置预测"""
+        # 记录敌人单位出现的位置
+        for pos in enemy_positions:
+            if pos[0] not in self.enemy_appearances:
+                self.enemy_appearances.append(pos[0])
+                #print(f"Enemy appeared at: {pos}")
+
+        gs=unpad(game_state,(y_offset, x_offset))
+        #gs=game_state[y_offset:y_offset+map_width,x_offset:x_offset+map_height]
+        for i in range(map_width):
+            for j in range(map_height):
+                if self.fog_scores and gs[i][j][6]==1 and game_map[i][j].color_index!=color:
+                    if Point(i,j) not in self.fog_scores:
+                        self.fog_scores[Point(i,j)]=0
+                    self.fog_scores[Point(i,j)]=max(1000,self.fog_scores[Point(i,j)])
+
+        # 对每个敌人出现的位置，使用BFS对周围的迷雾格子进行评分
+        for enemy_pos in enemy_positions:
+            self._bfs_score_fog(enemy_pos, game_map, map_width, map_height,gs,max_distance=8)
+            
+        for pt in self.fog_scores:
+            if game_map[pt.x][pt.y].tile_type == TileType.Fog or game_map[pt.x][pt.y].tile_type == TileType.Obstacle:
+                continue
+            if game_map[pt.x][pt.y].tile_type!=TileType.King and (game_map[pt.x][pt.y].tile_type!=TileType.City or game_map[pt.x][pt.y].color_index is None or game_map[pt.x][pt.y].color_index==color):
+                self.fog_scores[pt]*=0.5
+        #print(self.fog_scores)
+        # 找到得分最高的迷雾格子作为预测的将军位置
+        if self.fog_scores:
+            self.predicted_general = max(self.fog_scores.keys(), key=lambda p: self.fog_scores[p])
+            self.confidence = self.fog_scores[self.predicted_general]
+            print(f"Predicted general at: {self.predicted_general} with confidence: {self.confidence}")
+        else:
+            self.predicted_general = None
+            self.confidence = 0
+            
+    def _bfs_score_fog(self, start: Tuple[Point,int], game_map, map_width, map_height, game_state, max_distance):
+        """从敌人出现位置BFS遍历迷雾并评分"""
+        distances = {}
+        visited = set()
+        queue = deque()
+        
+        distances[start[0]] = 0
+        visited.add(start[0])
+        queue.append(start[0])
+        val=min(2+start[1]**0.8,60)
+
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        
+        while queue:
+            current = queue.popleft()
+            current_dist = distances[current]
+            #print(current,current=start[0])
+            if game_state[current.x][current.y][8] != 1:
+                # 分数基于距离：距离越近，分数越高
+                if current not in self.fog_scores:
+                    self.fog_scores[current] = 0
+                self.fog_scores[current] += 3*val//(current_dist+1)
+
+            # 如果达到最大距离，停止搜索
+            if current_dist >= max_distance or (game_map[current.x][current.y].tile_type!=TileType.Fog and game_map[current.x][current.y].tile_type!=TileType.Obstacle and current!=start[0]):
+                continue
+                
+            for d in directions:
+                nx, ny = current.x + d[0], current.y + d[1]
+                
+                # 检查边界
+                if nx < 0 or nx >= map_width or ny < 0 or ny >= map_height:
+                    continue
+                    
+                nb = Point(nx, ny)
+                # 跳过已访问的节点
+                if nb in visited:
+                    continue
+                # 获取邻居瓦片
+                neighbor_tile = game_map[nx][ny]
+                # 跳过不可通行的地形
+                if neighbor_tile.tile_type in [TileType.Mountain, TileType.Obstacle]:
+                    continue
+                # 添加到已访问集合
+                visited.add(nb)
+                distances[nb] = current_dist + 1
+                queue.append(nb)
+       
 class GBot(GBotBase):
     def __init__(self, room_id: str, username: str = "GenniaBot"):
         super().__init__(room_id,username)
@@ -58,9 +161,16 @@ class GBot(GBotBase):
         self.game_mode=0
         self.x_offset=0
         self.y_offset=0
+        self.general_predictor = GeneralPrediction()
+        self.previous_game_map = None
+        self.dis2pg=None
 
     def init_map(self, map_width: int, map_height: int):
         self.game_map = [
+            [TileProp(TileType.Fog, None, None) for _ in range(map_height)]
+            for _ in range(map_width)
+        ]
+        self.previous_game_map = [
             [TileProp(TileType.Fog, None, None) for _ in range(map_height)]
             for _ in range(map_width)
         ]
@@ -70,6 +180,8 @@ class GBot(GBotBase):
         self.defense_mode = False
         self.collect_time=0
         self.game_mode=0
+        self.dis2pg=None
+        self.general_predictor = GeneralPrediction()
         
     def bfs(self, start: List[Tuple[int,int]], max_distance=9999) -> Dict[Tuple[int,int], int]:
         """广度优先搜索计算距离"""
@@ -125,8 +237,8 @@ class GBot(GBotBase):
         king_army=self.game_map[self.king_position.x][self.king_position.y].army_size        
         
         # 检查国王周围5格内是否有敌方单位
-        for dx in range(-8, 9):
-            for dy in range(-8, 9):
+        for dx in range(-10, 10):
+            for dy in range(-10, 10):
                     
                 nx, ny = self.king_position.x + dx, self.king_position.y + dy
                 if 0 <= nx < len(self.game_map) and 0 <= ny < len(self.game_map[0]):
@@ -144,8 +256,8 @@ class GBot(GBotBase):
             
         # 1. 寻找国王周围的己方单位
         defense_units = []
-        for dx in range(-8, 9):
-            for dy in range(-8, 9):
+        for dx in range(-10, 10):
+            for dy in range(-10, 10):
                 if dx==0 and dy==0:
                     continue
                 nx, ny = self.king_position.x + dx, self.king_position.y + dy
@@ -220,9 +332,61 @@ class GBot(GBotBase):
                     best_path = [source, Point(nx, ny)]
         
         return best_path
+    
+    def detect_enemy_appearances(self):
+        """检测敌人单位出现的位置（新增检测逻辑）"""
+        enemy_positions = []
+        if not self.previous_game_map:
+            return enemy_positions
+            
+        map_width = len(self.game_map)
+        map_height = len(self.game_map[0])
+        
+        for i in range(map_width):
+            for j in range(map_height):
+                prev_tile = self.previous_game_map[i][j]
+                curr_tile = self.game_map[i][j]
+                
+                # 情况1：从迷雾中出现敌人
+                if ((prev_tile.tile_type==TileType.Fog or prev_tile.tile_type==TileType.Obstacle) and 
+                    curr_tile.color_index != self.color and 
+                    curr_tile.color_index is not None and curr_tile.army_size is not None):
+                    enemy_positions.append((Point(i, j),curr_tile.army_size))
+                    print(f"Enemy emergence detected at {i},{j}: {curr_tile.army_size}")
+                    continue
+                
+                # 情况2：敌人兵力突然大幅增加
+                if (prev_tile.color_index != self.color and prev_tile.color_index is not None and prev_tile.color_index >= 0 and
+                    curr_tile.color_index != self.color and curr_tile.color_index is not None and curr_tile.color_index >= 0):
+                    if prev_tile.army_size is None or curr_tile.army_size is None:
+                        continue
+                    # 计算上一回合自身及相邻格子的总兵力
+                    #print(prev_tile.color_index,curr_tile.color_index)
+                    total_prev = prev_tile.army_size
+                    for dx, dy in [(0,1),(0,-1),(1,0),(-1,0)]:
+                        ni, nj = i + dx, j + dy
+                        if 0 <= ni < map_width and 0 <= nj < map_height:
+                            neighbor = self.previous_game_map[ni][nj]
+                            if neighbor.color_index != self.color and neighbor.color_index is not None and neighbor.army_size is not None:
+                                total_prev += neighbor.army_size
+                    if curr_tile.army_size > total_prev+10:
+                        enemy_positions.append((Point(i, j),curr_tile.army_size - total_prev))
+                        print(f"Enemy reinforcement detected at {i},{j}: {curr_tile.army_size} > {total_prev}")
+        
+        return enemy_positions
+    
     def patch_map(self, map_diff: List[Union[int, TilePropTuple]]):
         if not self.game_map:
             return
+        # 保存当前地图到上一回合
+        if self.game_map:
+            map_width = len(self.game_map)
+            map_height = len(self.game_map[0])
+            self.previous_game_map = [
+                [TileProp(self.game_map[i][j].tile_type, self.game_map[i][j].color_index, self.game_map[i][j].army_size) 
+                 for j in range(map_height)] 
+                for i in range(map_width)
+            ]
         map_width = len(self.game_map)
         map_height = len(self.game_map[0])
         flattened = [tile for row in self.game_map for tile in row]
@@ -238,10 +402,11 @@ class GBot(GBotBase):
             for j in range(map_height):
                 new_state[i][j] = flattened[i * map_height + j]
         self.game_map = new_state
-
+        
         self.y_offset,self.x_offset=self.upd_map_state()
         if not self.king_position:
             self.find_king_position()
+        last_turn_vis=self.enemy_visable
         self.enemy_visable=False
         vise=[]
         for i in range(map_width):
@@ -249,6 +414,15 @@ class GBot(GBotBase):
                 if self.game_map[i][j].color_index!=self.color and self.game_map[i][j].color_index:
                     self.enemy_visable=True
                     vise.append((i,j))
+        if self.enemy_visable:
+            # 检测敌人出现
+            enemy_appearances = self.detect_enemy_appearances()
+            # 更新将军预测
+            if enemy_appearances:
+                self.general_predictor.update_prediction(enemy_appearances, self.game_map, map_width, map_height,self.game_state,self.x_offset,self.y_offset,self.color)
+            if not last_turn_vis:
+                #self.send_message(f"看到你了{self.game_map[vise[0][0]][vise[0][1]].color_index}")
+                pass
         self.distab=self.bfs(vise)
         self.check_king_threat()
 
@@ -342,8 +516,16 @@ class GBot(GBotBase):
             td=self.distab[(nx,ny)]
             if td<sd:
                 sc_mul*=2
+        if self.general_predictor.predicted_general:
+            current_dist = self.dis2pg.get((source.x,source.y),1000)
+            new_dist = self.dis2pg.get((nx,ny),1000)
+            if new_dist < current_dist:
+                if self.general_predictor.confidence<1000:
+                    sc_mul*=2
+                else:
+                    sc_mul*=2.5
         return score,sc_mul
-    def evaluate_move1(self, source: Point, direction: Tuple[int, int]) -> float:
+    def evaluate_move1(self, source: Point, direction: Tuple[int, int],self_army:int) -> float:
         nx, ny = source.x + direction[0], source.y + direction[1]
         # 边界检查
         if nx < 0 or ny < 0 or nx >= len(self.game_map) or ny >= len(self.game_map[0]):
@@ -364,13 +546,20 @@ class GBot(GBotBase):
         df=(move_army-target_tile.army_size)
 
         # 3. 目标为中立单位（空地/要塞）
-        if not target_tile.color_index or target_tile.color_index == 0:
+        if not target_tile.color_index or target_tile.color_index <= 0:
             if target_tile.tile_type == TileType.City:  # 中立要塞
                 if self.enemy_visable:
                     return 15+df/6 if move_army >= target_tile.army_size + 2 else 0
                 else:
                     return 20+df/6 if move_army >= target_tile.army_size + 2 else 0
-            return 15  # 空地
+            if self.enemy_visable and (nx,ny) in self.distab and self.turns_count>100 and move_army>self.turns_count/2:
+                sd=self.distab[(source.x,source.y)]
+                td=self.distab[(nx,ny)]
+                if td<sd:
+                    return 15+move_army/3
+            if not self.enemy_visable:
+                return 15+move_army/3
+            return 15
         
         # 4. 目标为敌方单位
         if target_tile.color_index != self.color:
@@ -390,6 +579,9 @@ class GBot(GBotBase):
         
         if target_tile.color_index == self.color and target_tile.tile_type==TileType.King and (move_army>=100 or (self.turns_count>=200 and random.random()<1/2)):
             return 0
+        if self.turns_count<=100 and not self.enemy_visable:
+            if abs(2*nx-len(self.game_map))+abs(2*ny-len(self.game_map[0]))<abs(2*source.x-len(self.game_map))+abs(2*source.y-len(self.game_map[0])):
+                score+=move_army*0.5
 
         # 首都保护：前期减少移动首都兵力
         if source_tile.tile_type == TileType.King:
@@ -401,6 +593,13 @@ class GBot(GBotBase):
             if td<sd:
                 ma_scalar=0.2
         score += move_army * ma_scalar
+        if self.general_predictor.predicted_general:
+            current_dist = self.dis2pg.get((source.x,source.y),1000)
+            new_dist = self.dis2pg.get((nx,ny),1000)
+            if new_dist < current_dist:
+                #if move_army>self_army/8 and move_army>=self.turns_count/4:
+                if move_army>self_army/8:
+                    score += move_army * 0.15
         return score
 
     def handle_move(self):
@@ -423,6 +622,25 @@ class GBot(GBotBase):
                 tile = self.game_map[i][j]
                 if tile.color_index == self.color and tile.army_size > 1 and tile.tile_type!=TileType.King:
                     max_army=max(max_army,tile.army_size)
+        if self.general_predictor.predicted_general:
+            self.dis2pg=self.bfs([(self.general_predictor.predicted_general.x,self.general_predictor.predicted_general.y)])
+        #check king
+        lands = []
+        for i in range(len(self.game_map)):
+            for j in range(len(self.game_map[0])):
+                tile = self.game_map[i][j]
+                if tile.color_index == self.color and tile.army_size > 1:
+                    lands.append(Point(i, j))
+        # 评估所有可能移动
+        moves = []
+        directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        for source in lands:
+            for direction in directions:
+                score = self.evaluate_move1(source, direction,self_army)
+                if score==1000:
+                    target = Point(source.x + direction[0],source.y + direction[1])
+                    return ({"x": source.x, "y": source.y},{"x": target.x, "y": target.y},False)
+        
         if self.defense_mode:
             defense_move = self.find_defense_move()
             if defense_move:
@@ -437,6 +655,10 @@ class GBot(GBotBase):
             self.game_mode=1
         if not (max_army>=self_army/6 and max_army>=100):
             self.game_mode=0
+        
+        if self.turns_count<=20:
+            return
+        
         if self.game_mode==1:
             # 收集所有可移动格子（兵力>1）
             lands = np.zeros((map_width,map_height))
@@ -478,6 +700,7 @@ class GBot(GBotBase):
             target_point = {"x": source.x + direction[0], "y": source.y + direction[1]}
             self.rep_pen[source.x][source.y][dtp2dir(direction)]+=0.3
         else:
+            self.rep_pen*=0.9
             # 收集所有可移动格子（兵力>1）
             lands = []
             for i in range(len(self.game_map)):
@@ -490,10 +713,10 @@ class GBot(GBotBase):
             directions = [(0, 1), (0, -1), (1, 0), (-1, 0)]
             for source in lands:
                 for direction in directions:
-                    score = self.evaluate_move1(source, direction)
+                    score = self.evaluate_move1(source, direction,self_army)
                     if score < 0:  # 跳过无效移动
                         continue
-                    moves.append((source, direction, score))
+                    moves.append((source, direction, score*(1-self.rep_pen[source.x][source.y][dtp2dir(direction)])))
             
             # 选择最佳移动
             if not moves:
@@ -506,6 +729,7 @@ class GBot(GBotBase):
                     best_moves.append(move)
             
             source, direction, _ = random.choice(best_moves)
+            self.rep_pen[source.x][source.y][dtp2dir(direction)]+=0.3
             if source==self.king_position and self.turns_count>=200:
                 move_half=True
             target_point = {"x": source.x + direction[0], "y": source.y + direction[1]}
@@ -515,4 +739,5 @@ class GBot(GBotBase):
         else:
             self.collect_time+=1
 
-        return({"x": source.x, "y": source.y},target_point,move_half)
+        return ({"x": source.x, "y": source.y},target_point,move_half)
+        
