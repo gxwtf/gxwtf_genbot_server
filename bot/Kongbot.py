@@ -265,7 +265,7 @@ class Generals(object):
         """处理移动请求"""
         try:
             # 检查是否有移动指令
-            if self.parent_conn.poll(0.3):  # 0.3秒超时
+            if self.parent_conn.poll(0.1):  # 0.1秒超时
                 msg = self.parent_conn.recv()
                 if msg[0] == 'move':
                     return msg[1]
