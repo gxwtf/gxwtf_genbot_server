@@ -6,6 +6,7 @@ import math
 from typing import Dict
 from collections import deque
 
+
 class Point:
     def __init__(self, x: int, y: int):
         self.x = x
@@ -19,6 +20,8 @@ class Point:
 ORIGINAL_MAP_WIDTH=23
 MAP_CHANNELS=11
 def pad(state, fill_value = 0, map_width = ORIGINAL_MAP_WIDTH):
+    if map_width<state.shape[1] or map_width<state.shape[0]:
+        return state,(0,0),(0,0)
     x_diff = float(map_width - state.shape[1]) / 2
     x_padding = (math.ceil(x_diff), math.floor(x_diff))
     y_diff = float(map_width - state.shape[0]) / 2
@@ -57,6 +60,12 @@ class GeneralPrediction:
         self.predicted_general = None  # 预测的将军位置
         self.confidence = 0  # 预测置信度
         
+    def score_decay(self,game_map,color):
+        for pt in self.fog_scores:
+            if game_map[pt.x][pt.y].tile_type == TileType.Fog or game_map[pt.x][pt.y].tile_type == TileType.Obstacle:
+                continue
+            if game_map[pt.x][pt.y].tile_type!=TileType.King and (game_map[pt.x][pt.y].tile_type!=TileType.City or game_map[pt.x][pt.y].color_index is None or game_map[pt.x][pt.y].color_index==color):
+                self.fog_scores[pt]*=0.5
     def update_prediction(self, enemy_positions, game_map, map_width, map_height, game_state, x_offset, y_offset,color):
         """更新将军位置预测"""
         # 记录敌人单位出现的位置
@@ -78,11 +87,7 @@ class GeneralPrediction:
         for enemy_pos in enemy_positions:
             self._bfs_score_fog(enemy_pos, game_map, map_width, map_height,gs,max_distance=8)
             
-        for pt in self.fog_scores:
-            if game_map[pt.x][pt.y].tile_type == TileType.Fog or game_map[pt.x][pt.y].tile_type == TileType.Obstacle:
-                continue
-            if game_map[pt.x][pt.y].tile_type!=TileType.King and (game_map[pt.x][pt.y].tile_type!=TileType.City or game_map[pt.x][pt.y].color_index is None or game_map[pt.x][pt.y].color_index==color):
-                self.fog_scores[pt]*=0.5
+        self.score_decay(game_map,color)
         #print(self.fog_scores)
         # 找到得分最高的迷雾格子作为预测的将军位置
         if self.fog_scores:
@@ -163,7 +168,12 @@ class GBot(GBotBase):
         self.y_offset=0
         self.general_predictor = GeneralPrediction()
         self.previous_game_map = None
+        self.previous_leaderboard = None
         self.dis2pg=None
+        self.disable_ai=False
+        self.cities_cnt=[]
+        self.should_or_not=False
+        self.centre_dis=None
 
     def init_map(self, map_width: int, map_height: int):
         self.game_map = [
@@ -182,6 +192,12 @@ class GBot(GBotBase):
         self.game_mode=0
         self.dis2pg=None
         self.general_predictor = GeneralPrediction()
+        if map_height>23 or map_height>23:
+            self.disable_ai=True
+            self.game_state=np.zeros((map_width,map_height, MAP_CHANNELS)).astype('float32')
+        self.previous_leaderboard = None
+        self.cities_cnt=[[1]*16,[0]*16]
+        self.should_or_not=False
         
     def bfs(self, start: List[Tuple[int,int]], max_distance=9999) -> Dict[Tuple[int,int], int]:
         """广度优先搜索计算距离"""
@@ -423,9 +439,36 @@ class GBot(GBotBase):
             if not last_turn_vis:
                 #self.send_message(f"看到你了{self.game_map[vise[0][0]][vise[0][1]].color_index}")
                 pass
+        
+        self.general_predictor.score_decay(self.game_map,self.color)
         self.distab=self.bfs(vise)
         self.check_king_threat()
+        if self.turns_count%50!=0:
+            for i in range(len(self.leader_board_data)):
+                if self.leader_board_data[i][0]==self.color:
+                    self.cities_cnt[0][self.color]=0
+                    for j in range(map_width):
+                        for k in range(map_height):
+                            if self.game_map[j][k].color_index==self.color and (self.game_map[j][k].tile_type==TileType.King or self.game_map[j][k].tile_type==TileType.City):
+                                self.cities_cnt[0][self.color]+=1
+                    continue
+                delta=self.leader_board_data[i][2]-self.previous_leaderboard[i][2]
+                if delta>=self.cities_cnt[0][self.leader_board_data[i][0]] or self.cities_cnt[1][self.leader_board_data[i][0]]>=20 and delta<50:
+                    self.cities_cnt[0][self.leader_board_data[i][0]]=delta
+                    self.cities_cnt[1][self.leader_board_data[i][0]]=0
+                self.cities_cnt[1][self.leader_board_data[i][0]]+=1
+        self.previous_leaderboard=self.leader_board_data
 
+
+        if self.turns_count==1:
+            si=0
+            sj=0
+            for i in range(map_width):
+                for j in range(map_height):
+                    if self.game_map[i][j].tile_type==TileType.Fog and abs(2*i-map_width)+abs(2*j-map_height)<abs(2*si-map_width)+abs(2*sj-map_height):
+                        si=i
+                        sj=j
+            self.centre_dis=self.bfs([(si,sj)])
 
     def upd_map_state(self):
         map_width = len(self.game_map)
@@ -477,6 +520,11 @@ class GBot(GBotBase):
         self.game_state=map_state.astype('float32')
         #print(y_padding,x_padding)
         return y_padding,x_padding
+
+    def roast(self,multi):
+        p="们" if multi else ""
+        rl=["局势对你方很不妙",f"再这样下去，你{p}就要失败了","点击输入文本","点左上角箭头可以投降","游戏教程在主页右上角","今天走路来的啊","池塘中有10朵莲，我只采1朵",f"你{p}和平原有个相同的特点","你知道喝茶要找什么吗","50的水瓶我45就买到了","?","如何集中注意力？让你做事更集中的7个小技巧","「回家睡觉去吧」的意思是指人们应该回家安心休息。随着现代生活节奏的加快，越来越多的人晚上都处于忙碌状态，导致失眠、缺乏睡眠等问题逐渐突出。而回家睡觉不仅可以让身体得到充分休息，还可以促进身心健康。因此，这句话不仅是一种劝告，更是传递出对健康生活的呼吁。","你可是我的快乐源泉啊！"]
+        self.send_message(random.choice(rl))
 
     def evaluate_move(self, source: Point, direction: Tuple[int, int]):
         nx, ny = source.x + direction[0], source.y + direction[1]
@@ -548,11 +596,20 @@ class GBot(GBotBase):
         # 3. 目标为中立单位（空地/要塞）
         if not target_tile.color_index or target_tile.color_index <= 0:
             if target_tile.tile_type == TileType.City:  # 中立要塞
+                if self.should_or_not:
+                    if self.general_predictor.predicted_general:
+                        g_dist = self.dis2pg.get((nx,ny),1000)
+                        k_dist=abs(nx-self.king_position.x)+abs(ny-self.king_position.y)
+                        if g_dist>=k_dist*1.5:
+                            return 30+df/6 if move_army >= target_tile.army_size + 2 else 0
+
+                    return 25+df/6 if move_army >= target_tile.army_size + 2 else 0
+                
                 if self.enemy_visable:
                     return 15+df/6 if move_army >= target_tile.army_size + 2 else 0
                 else:
                     return 20+df/6 if move_army >= target_tile.army_size + 2 else 0
-            if self.enemy_visable and (nx,ny) in self.distab and self.turns_count>100 and move_army>self.turns_count/2:
+            if self.enemy_visable and (nx,ny) in self.distab and self.turns_count>100 and move_army>self.turns_count/8:
                 sd=self.distab[(source.x,source.y)]
                 td=self.distab[(nx,ny)]
                 if td<sd:
@@ -580,7 +637,7 @@ class GBot(GBotBase):
         if target_tile.color_index == self.color and target_tile.tile_type==TileType.King and (move_army>=100 or (self.turns_count>=200 and random.random()<1/2)):
             return 0
         if self.turns_count<=100 and not self.enemy_visable:
-            if abs(2*nx-len(self.game_map))+abs(2*ny-len(self.game_map[0]))<abs(2*source.x-len(self.game_map))+abs(2*source.y-len(self.game_map[0])):
+            if self.centre_dis.get((nx,ny),abs(2*nx-len(self.game_map))+abs(2*ny-len(self.game_map[0])))<self.centre_dis.get((source.x,source.y),abs(2*source.x-len(self.game_map))+abs(2*source.y-len(self.game_map[0]))):
                 score+=move_army*0.5
 
         # 首都保护：前期减少移动首都兵力
@@ -606,17 +663,51 @@ class GBot(GBotBase):
         #[player.color, player.team, data.army, data.land]
         if not self.game_map or not self.init_game_info or not self.color:
             return
+        
+        # calculate cland and carmy
+        playercnt=len(self.leader_board_data)
+        cland = []
+        carmy = []
+        for i in range(playercnt):
+            clr=self.leader_board_data[i][0]
+            if self.leader_board_data[i][2]==0:
+                cland.append(0)
+                carmy.append(0)
+                continue
+            cland.append(self.leader_board_data[i][3] + 25 * (self.cities_cnt[0][clr] - 1))
+            carmy.append(self.leader_board_data[i][2] + 48 * (self.cities_cnt[0][clr] - 1))
+
+        
         map_width = len(self.game_map)
         map_height = len(self.game_map[0])
         y_offset=self.y_offset
         x_offset=self.x_offset
         self_land=0
         self_army=0
-        for dat in self.leader_board_data:
+        win_rate=0.5
+        max_ecities=0
+        self_cland=0
+        maxe_cland=0
+        for i,dat in enumerate(self.leader_board_data):
             if dat[0]==self.color:
                 self_land=dat[3]
                 self_army=dat[2]
+                win_rate=carmy[i]/sum(carmy)
+                self_cland=cland[i]
+            else:
+                max_ecities=max(max_ecities,self.cities_cnt[0][dat[0]])
+                maxe_cland=max(maxe_cland,cland[i])
+        # if self.turns_count%25==0:
+        #     print("win rate:",win_rate)
+        # for debug
+        # if self.turns_count%50==0 and self.turns_count>0:
+        #     self.send_message("win rate "+format(win_rate, '.2f'))
+        
+        if self.turns_count%25==0 and win_rate>=0.65:
+            self.roast(len(self.leader_board_data)>2)
+
         max_army=0
+        
         for i in range(len(self.game_map)):
             for j in range(len(self.game_map[0])):
                 tile = self.game_map[i][j]
@@ -655,10 +746,24 @@ class GBot(GBotBase):
             self.game_mode=1
         if not (max_army>=self_army/6 and max_army>=100):
             self.game_mode=0
+        if self.disable_ai:
+            self.game_mode=0
+
+        if win_rate > 0.43 and self.cities_cnt[0][self.color] < max_ecities: 
+            self.should_or_not=True
+        elif win_rate > 0.47 and maxe_cland > self_cland + 10 and self_cland + (50 - self.turns_count % 50) < maxe_cland: 
+            self.should_or_not=True
+        elif win_rate > 0.47 and maxe_cland > self_cland + 20: 
+            self.should_or_not=True
+        else:
+            self.should_or_not=False
+        # for dat in self.leader_board_data:
+        #     print("color",dat[0],':',self.cities_cnt[0][dat[0]])
+        
         
         if self.turns_count<=20:
             return
-        
+
         if self.game_mode==1:
             # 收集所有可移动格子（兵力>1）
             lands = np.zeros((map_width,map_height))
@@ -700,7 +805,7 @@ class GBot(GBotBase):
             target_point = {"x": source.x + direction[0], "y": source.y + direction[1]}
             self.rep_pen[source.x][source.y][dtp2dir(direction)]+=0.3
         else:
-            self.rep_pen*=0.9
+            self.rep_pen*=0.95
             # 收集所有可移动格子（兵力>1）
             lands = []
             for i in range(len(self.game_map)):
@@ -740,4 +845,3 @@ class GBot(GBotBase):
             self.collect_time+=1
 
         return ({"x": source.x, "y": source.y},target_point,move_half)
-        
